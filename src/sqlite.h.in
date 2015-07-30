@@ -4441,6 +4441,35 @@ int sqlite3_collation_needed16(
 );
 
 #ifdef SQLITE_HAS_CODEC
+
+#include "crypt.h"
+
+#define CRYPT_OFFSET 8
+typedef struct _CryptBlock {
+	unsigned char* ReadKey; // 读数据库和写入事务的密钥
+	unsigned char* WriteKey; // 写入数据库的密钥
+	int PageSize; // 页的大小
+	unsigned char* Data;
+} CryptBlock, *LPCryptBlock;
+
+#ifndef DB_KEY_LENGTH_BYTE
+#define DB_KEY_LENGTH_BYTE   16
+#endif
+
+#ifndef DB_KEY_PADDING
+#define DB_KEY_PADDING       0x33
+#endif
+
+void sqlite3CodecGetKey(sqlite3* db, int nDB, void** Key, int* nKey) {
+	return;
+}
+
+int sqlite3CodecAttach(sqlite3 *db, int nDb, const void *pKey, int nKeyLen);
+
+void sqlite3_activate_see(const char* right) {
+	return;
+}
+
 /*
 ** Specify the key for an encrypted database.  This routine should be
 ** called right after sqlite3_open().

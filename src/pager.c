@@ -6380,6 +6380,651 @@ void sqlite3PagerSetCodec(
 void *sqlite3PagerGetCodec(Pager *pPager){
   return pPager->pCodec;
 }
+
+/******************* DES *****************************************************/
+enum{ENCRYPT, DECRYPT};
+
+int Encrypt_Des(char *Out, char *In, long datalen, const char *Key, int keylen, int Type);
+
+// initial permutation IP
+const static char IP_Table[64] = {
+	58, 50, 42, 34, 26, 18, 10, 2, 60, 52, 44, 36, 28, 20, 12, 4,
+	62, 54, 46, 38, 30, 22, 14, 6, 64, 56, 48, 40, 32, 24, 16, 8,
+	57, 49, 41, 33, 25, 17,  9, 1, 59, 51, 43, 35, 27, 19, 11, 3,
+	61, 53, 45, 37, 29, 21, 13, 5, 63, 55, 47, 39, 31, 23, 15, 7
+};
+// final permutation IP^-1
+const static char IPR_Table[64] = {
+	40, 8, 48, 16, 56, 24, 64, 32, 39, 7, 47, 15, 55, 23, 63, 31,
+	38, 6, 46, 14, 54, 22, 62, 30, 37, 5, 45, 13, 53, 21, 61, 29,
+	36, 4, 44, 12, 52, 20, 60, 28, 35, 3, 43, 11, 51, 19, 59, 27,
+	34, 2, 42, 10, 50, 18, 58, 26, 33, 1, 41,  9, 49, 17, 57, 25
+};
+// expansion operation matrix
+static const char E_Table[48] = {
+	32,  1,  2,  3,  4,  5,  4,  5,  6,  7,  8,  9,
+	 8,  9, 10, 11, 12, 13, 12, 13, 14, 15, 16, 17,
+	16, 17, 18, 19, 20, 21, 20, 21, 22, 23, 24, 25,
+	24, 25, 26, 27, 28, 29, 28, 29, 30, 31, 32,  1
+};
+// 32-bit permutation function P used on the output of the S-boxes
+const static char P_Table[32] = {
+	16, 7, 20, 21, 29, 12, 28, 17, 1,  15, 23, 26, 5,  18, 31, 10,
+	2,  8, 24, 14, 32, 27, 3,  9,  19, 13, 30, 6,  22, 11, 4,  25
+};
+// permuted choice table (key)
+const static char PC1_Table[56] = {
+	57, 49, 41, 33, 25, 17,  9,  1, 58, 50, 42, 34, 26, 18,
+	10,  2, 59, 51, 43, 35, 27, 19, 11,  3, 60, 52, 44, 36,
+	63, 55, 47, 39, 31, 23, 15,  7, 62, 54, 46, 38, 30, 22,
+	14,  6, 61, 53, 45, 37, 29, 21, 13,  5, 28, 20, 12,  4
+};
+// permuted choice key (table)
+const static char PC2_Table[48] = {
+	14, 17, 11, 24,  1,  5,  3, 28, 15,  6, 21, 10,
+	23, 19, 12,  4, 26,  8, 16,  7, 27, 20, 13,  2,
+	41, 52, 31, 37, 47, 55, 30, 40, 51, 45, 33, 48,
+	44, 49, 39, 56, 34, 53, 46, 42, 50, 36, 29, 32
+};
+// number left rotations of pc1
+const static char LOOP_Table[16] = {
+	1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1
+};
+// The (in)famous S-boxes
+const static char S_Box[8][4][16] = {
+	{
+		{14,  4, 13,  1,  2, 15, 11,  8,  3, 10,  6, 12,  5,  9,  0,  7},
+		{ 0, 15,  7,  4, 14,  2, 13,  1, 10,  6, 12, 11,  9,  5,  3,  8},
+		{ 4,  1, 14,  8, 13,  6,  2, 11, 15, 12,  9,  7,  3, 10,  5,  0},
+		{15, 12,  8,  2,  4,  9,  1,  7,  5, 11,  3, 14, 10,  0,  6, 13}
+	},
+	{
+		{15,  1,  8, 14,  6, 11,  3,  4,  9,  7,  2, 13, 12,  0,  5, 10},
+		{ 3, 13,  4,  7, 15,  2,  8, 14, 12,  0,  1, 10,  6,  9, 11,  5},
+		{ 0, 14,  7, 11, 10,  4, 13,  1,  5,  8, 12,  6,  9,  3,  2, 15},
+		{13,  8, 10,  1,  3, 15,  4,  2, 11,  6,  7, 12,  0,  5, 14,  9}
+	},
+	{
+		{10,  0,  9, 14,  6,  3, 15,  5,  1, 13, 12,  7, 11,  4,  2,  8},
+		{13,  7,  0,  9,  3,  4,  6, 10,  2,  8,  5, 14, 12, 11, 15,  1},
+		{13,  6,  4,  9,  8, 15,  3,  0, 11,  1,  2, 12,  5, 10, 14,  7},
+		{ 1, 10, 13,  0,  6,  9,  8,  7,  4, 15, 14,  3, 11,  5,  2, 12}
+ 	},
+	{
+		{ 7, 13, 14,  3,  0,  6,  9, 10,  1,  2,  8,  5, 11, 12,  4, 15},
+		{13,  8, 11,  5,  6, 15,  0,  3,  4,  7,  2, 12,  1, 10, 14,  9},
+		{10,  6,  9,  0, 12, 11,  7, 13, 15,  1,  3, 14,  5,  2,  8,  4},
+		{ 3, 15,  0,  6, 10,  1, 13,  8,  9,  4,  5, 11, 12,  7,  2, 14}
+	},
+	{
+		{ 2, 12,  4,  1,  7, 10, 11,  6,  8,  5,  3, 15, 13,  0, 14,  9},
+		{14, 11,  2, 12,  4,  7, 13,  1,  5,  0, 15, 10,  3,  9,  8,  6},
+		{ 4,  2,  1, 11, 10, 13,  7,  8, 15,  9, 12,  5,  6,  3,  0, 14},
+		{11,  8, 12,  7,  1, 14,  2, 13,  6, 15,  0,  9, 10,  4,  5,  3},
+	},
+	{
+		{12,  1, 10, 15,  9,  2,  6,  8,  0, 13,  3,  4, 14,  7,  5, 11},
+		{10, 15,  4,  2,  7, 12,  9,  5,  6,  1, 13, 14,  0, 11,  3,  8},
+		{ 9, 14, 15,  5,  2,  8, 12,  3,  7,  0,  4, 10,  1, 13, 11,  6},
+		{ 4,  3,  2, 12,  9,  5, 15, 10, 11, 14,  1,  7,  6,  0,  8, 13}
+	},
+	{
+		{ 4, 11,  2, 14, 15,  0,  8, 13,  3, 12,  9,  7,  5, 10,  6,  1},
+		{13,  0, 11,  7,  4,  9,  1, 10, 14,  3,  5, 12,  2, 15,  8,  6},
+		{ 1,  4, 11, 13, 12,  3,  7, 14, 10, 15,  6,  8,  0,  5,  9,  2},
+		{ 6, 11, 13,  8,  1,  4, 10,  7,  9,  5,  0, 15, 14,  2,  3, 12},
+	},
+	{
+		{13,  2,  8,  4,  6, 15, 11,  1, 10,  9,  3, 14,  5,  0, 12,  7},
+		{ 1, 15, 13,  8, 10,  3,  7,  4, 12,  5,  6, 11,  0, 14,  9,  2},
+		{ 7, 11,  4,  1,  9, 12, 14,  2,  0,  6, 10, 13, 15,  3,  5,  8},
+		{ 2,  1, 14,  7,  4, 10,  8, 13, 15, 12,  9,  0,  3,  5,  6, 11}
+	}
+};
+
+typedef char (*PSubKey)[16][48];
+static char SubKey[2][16][48];
+static unsigned long Is3DES;
+static char Tmp[256], deskey[16];
+
+static void Xor(char *InA, const char *InB, int len)
+{
+	int i;
+	for (i=0; i<len; ++i)
+		InA[i] ^= InB[i];
+}
+
+static void ByteToBit(char *Out, char *In, int bits)
+{
+	int i;
+	for (i=0; i<bits; ++i)
+		Out[i] = (In[i>>3]>>(i&7)) & 1;
+}
+
+static void BitToByte(char *Out, char *In, int bits)
+{
+	int i;
+	memset(Out, 0, bits>>3);
+	for (i=0; i<bits; ++i)
+		Out[i>>3] |= In[i]<<(i&7);
+}
+
+static void Transform(char *Out, char *In, const char *Table, int len)
+{
+	int i;
+	for (i=0; i<len; ++i)
+		Tmp[i] = In[Table[i]-1];
+	memcpy(Out, Tmp, len);
+}
+
+static void RotateL(char *In, int len, int loop)
+{
+	memcpy(Tmp, In, loop);
+	memcpy(In, In+loop, len-loop);
+	memcpy(In+len-loop, Tmp, loop);
+}
+
+static void SetSubKey(PSubKey pSubKey, char* Key)
+{
+	int i;
+	static char K[64], *KL = &K[0], *KR = &K[28];
+
+	ByteToBit(K, Key, 64);
+	Transform(K, K, PC1_Table, 56);
+	for (i=0; i<16; ++i)
+	{
+		RotateL(KL, 28, LOOP_Table[i]);
+		RotateL(KR, 28, LOOP_Table[i]);
+		Transform((*pSubKey)[i], K, PC2_Table, 48);
+	}
+}
+
+static void SetKey(char* Key, int len)
+{
+	memset(deskey, 0, 16);
+	memcpy(deskey, Key, len>16?16:len);
+
+	SetSubKey(&SubKey[0], &deskey[0]);
+	if (len>8)
+	{
+		SetSubKey(&SubKey[1], &deskey[8]);
+		Is3DES = 1;
+	}
+	else
+		Is3DES = 0;
+}
+
+static void S_func(char* Out, char* In)
+{
+	int i, j, k;
+
+	for (i=0; i<8; i++)
+	{
+		j = (In[0]<<1) + In[5];
+		k = (In[1]<<3) + (In[2]<<2) + (In[3]<<1) + In[4];
+		ByteToBit(Out,(char *) &S_Box[i][j][k], 4);
+		In+=6;
+		Out+=4;
+	}
+}
+
+static void F_func(char* In, char* Ki)
+{
+	static char MR[48];
+	Transform(MR, In, E_Table, 48);
+	Xor(MR, Ki, 48);
+	S_func(In, MR);
+	Transform(In, In, P_Table, 32);
+}
+
+static void DES(char* Out, char* In, PSubKey pSubKey, int Type)
+{
+	int i;
+	static char M[64], tmp[32], *Li=&M[0], *Ri=&M[32];
+
+	ByteToBit(M, In, 64);
+	Transform(M, M, IP_Table, 64);
+
+	if (Type==ENCRYPT)
+	{
+		for (i=0; i<16; ++i)
+		{
+			memcpy(tmp, Ri, 32);
+			F_func(Ri, (*pSubKey)[i]);
+			Xor(Ri, Li, 32);
+			memcpy(Li, tmp, 32);
+		}
+	}
+	else
+	{
+		for (i=15; i>=0; --i)
+		{
+			memcpy(tmp, Li, 32);
+			F_func(Li, (*pSubKey)[i]);
+			Xor(Li, Ri, 32);
+			memcpy(Ri, tmp, 32);
+		}
+	}
+
+	Transform(M, M, IPR_Table, 64);
+	BitToByte(Out, M, 64);
+}
+
+int Encrypt_Des(char *Out, char *In, long datalen, const char *Key, int keylen, int Type)
+{
+	long i;
+
+	if (!(Out && In && Key && (datalen=(datalen+7)&0xfffffff8)))
+		return 0;
+
+	SetKey((char *)Key, keylen);
+	if (!Is3DES)
+	{
+		// 1��DES
+		for (i=0; i<(datalen>>3); i++)
+		{
+			DES(Out, In, &SubKey[0], Type);
+			Out+=8;
+			In+=8;
+		}
+	}
+	else
+	{
+		// 3��DES ����:��(key0)-��(key1)-��(key0) ����::��(key0)-��(key1)-��(key0)
+		for (i=0; i<(datalen>>3); i++)
+		{
+			DES(Out, In,  &SubKey[0], Type);
+			DES(Out, Out, &SubKey[1], !Type);
+			DES(Out, Out, &SubKey[0], Type);
+			Out+=8;
+			In+=8;
+		}
+	}
+	return 1;
+}
+/******************* DES *****************************************************/
+
+int My_Encrypt_Func(unsigned char * pData, unsigned int data_len,
+		unsigned char * key, unsigned int len_of_key)
+{
+	unsigned int i;
+	unsigned char bit, val;
+
+	printf("%s+++++++++data_len:%d +++++++++++++++++++++++++++++\n", __FUNCTION__, data_len);
+//	for (i = 0; i < data_len; i++)
+//	{
+//		val = ~(*pData);
+//		*pData = val;
+//		pData++;
+//	}
+
+	Encrypt_Des(pData, pData, data_len, key, len_of_key, ENCRYPT);
+
+	return 0;
+
+}
+
+int My_DeEncrypt_Func(unsigned char * pData, unsigned int data_len,
+		unsigned char * key, unsigned int len_of_key)
+{
+	unsigned int i;
+	unsigned char bit, val;
+
+	printf("%s+++++++++data_len:%d +++++++++++++++++++++++++++++\n", __FUNCTION__, data_len);
+
+//	for (i = 0; i < data_len; i++)
+//	{
+//		val = ~(*pData);
+//		*pData = val;
+//		pData++;
+//	}
+
+	Encrypt_Des(pData, pData, data_len, key, len_of_key, DECRYPT);
+
+	return 0;
+}
+
+// 从用户提供的缓冲区中得到一个加密密钥
+// 用户提供的密钥可能位数上满足不了要求，使用这个函数来完成密钥扩展
+static unsigned char * DeriveKey(const void *pKey, int nKeyLen);
+
+//创建或更新一个页的加密算法索引.此函数会申请缓冲区.
+static LPCryptBlock CreateCryptBlock(unsigned char* hKey, Pager *pager,
+		LPCryptBlock pExisting);
+
+//加密/解密函数, 被pager调用
+void * sqlite3Codec(void *pArg, unsigned char *data, Pgno nPageNum, int nMode);
+
+//设置密码函数
+int sqlite3_key_interop(sqlite3 *db, const void *pKey, int nKeySize);
+
+// 修改密码函数
+int sqlite3_rekey_interop(sqlite3 *db, const void *pKey, int nKeySize);
+
+//销毁一个加密块及相关的缓冲区,密钥.
+static void DestroyCryptBlock(LPCryptBlock pBlock);
+
+static void * sqlite3pager_get_codecarg(Pager *pPager);
+
+void sqlite3pager_set_codec(Pager *pPager,
+
+void *(*xCodec)(void*, void*, Pgno, int), void *pCodecArg);
+
+//加密/解密函数, 被pager调用
+void * sqlite3Codec(void *pArg, unsigned char *data, Pgno nPageNum, int nMode) {
+	LPCryptBlock pBlock = (LPCryptBlock) pArg;
+	unsigned int dwPageSize = 0;
+
+	if (!pBlock)
+		return data;
+
+	// 确保pager的页长度和加密块的页长度相等.如果改变,就需要调整.
+	if (nMode != 2) {
+//		PgHdr *pageHeader;
+//		pageHeader = DATA_TO_PGHDR(data);
+//
+//		if (pageHeader->pPager->pageSize != pBlock->PageSize) {
+//			CreateCryptBlock(0, pageHeader->pPager, pBlock);
+//		}
+	}
+
+	switch (nMode) {
+		case 0: // Undo a "case 7" journal file encryption
+		case 2: //重载一个页
+		case 3: //载入一个页
+			if (!pBlock->ReadKey)
+				break;
+
+			dwPageSize = pBlock->PageSize;
+			My_DeEncrypt_Func(data, dwPageSize, pBlock->ReadKey,
+			DB_KEY_LENGTH_BYTE);
+
+			break;
+		case 6: //加密一个主数据库文件的页
+			if (!pBlock->WriteKey)
+				break;
+
+			memcpy(pBlock->Data + CRYPT_OFFSET, data, pBlock->PageSize);
+			data = pBlock->Data + CRYPT_OFFSET;
+			dwPageSize = pBlock->PageSize;
+			My_Encrypt_Func(data, dwPageSize, pBlock->WriteKey, DB_KEY_LENGTH_BYTE);
+
+			break;
+		case 7: //加密事务文件的页
+			if (!pBlock->ReadKey)
+				break;
+
+			memcpy(pBlock->Data + CRYPT_OFFSET, data, pBlock->PageSize);
+			data = pBlock->Data + CRYPT_OFFSET;
+			dwPageSize = pBlock->PageSize;
+			My_Encrypt_Func(data, dwPageSize, pBlock->ReadKey, DB_KEY_LENGTH_BYTE);
+			break;
+
+	}
+
+	return data;
+}
+
+//销毁一个加密块及相关的缓冲区,密钥.
+static void DestroyCryptBlock(LPCryptBlock pBlock)
+{
+	//销毁读密钥.
+	if (pBlock->ReadKey) {
+		sqlite3_free(pBlock->ReadKey);
+	}
+
+	//如果写密钥存在并且不等于读密钥,也销毁.
+	if (pBlock->WriteKey && pBlock->WriteKey != pBlock->ReadKey) {
+		sqlite3_free(pBlock->WriteKey);
+	}
+
+	if (pBlock->Data) {
+		sqlite3_free(pBlock->Data);
+	}
+
+	//释放加密块.
+	sqlite3_free(pBlock);
+}
+
+static void * sqlite3pager_get_codecarg(Pager *pPager)
+{
+	return (pPager->xCodec) ? pPager->pCodec : NULL;
+}
+
+// 从用户提供的缓冲区中得到一个加密密钥
+static unsigned char * DeriveKey(const void *pKey, int nKeyLen)
+{
+	unsigned char * hKey = NULL;
+	int j;
+
+	if (pKey == NULL || nKeyLen == 0)
+	{
+		return NULL;
+	}
+
+	hKey = sqlite3_malloc(DB_KEY_LENGTH_BYTE + 1);
+
+	if (hKey == NULL)
+	{
+		return NULL;
+	}
+
+	hKey[DB_KEY_LENGTH_BYTE] = 0;
+
+	if (nKeyLen < DB_KEY_LENGTH_BYTE)
+	{
+		memcpy(hKey, pKey, nKeyLen); //先拷贝得到密钥前面的部分
+		j = DB_KEY_LENGTH_BYTE - nKeyLen;
+
+		//补充密钥后面的部分
+		memset(hKey + nKeyLen, DB_KEY_PADDING, j);
+	}
+	else
+	{
+		//密钥位数已经足够,直接把密钥取过来
+		memcpy(hKey, pKey, DB_KEY_LENGTH_BYTE);
+	}
+
+	return hKey;
+}
+
+//创建或更新一个页的加密算法索引.此函数会申请缓冲区.
+static LPCryptBlock CreateCryptBlock(unsigned char* hKey, Pager *pager,
+		LPCryptBlock pExisting)
+{
+	LPCryptBlock pBlock;
+
+	if (!pExisting) //创建新加密块
+	{
+		pBlock = sqlite3_malloc(sizeof(CryptBlock));
+		memset(pBlock, 0, sizeof(CryptBlock));
+		pBlock->ReadKey = hKey;
+		pBlock->WriteKey = hKey;
+		pBlock->PageSize = pager->pageSize;
+		pBlock->Data = (unsigned char*) sqlite3_malloc(pBlock->PageSize + CRYPT_OFFSET);
+	}
+	else //更新存在的加密块
+	{
+		pBlock = pExisting;
+		if (pBlock->PageSize != pager->pageSize && !pBlock->Data) {
+			sqlite3_free(pBlock->Data);
+			pBlock->PageSize = pager->pageSize;
+			pBlock->Data = (unsigned char*) sqlite3_malloc(pBlock->PageSize + CRYPT_OFFSET);
+		}
+	}
+
+	memset(pBlock->Data, 0, pBlock->PageSize + CRYPT_OFFSET);
+
+	return pBlock;
+}
+
+void sqlite3pager_set_codec(Pager *pPager, void *(*xCodec)(void*, void*, Pgno, int), void *pCodecArg)
+{
+	pPager->xCodec = xCodec;
+	pPager->pCodec = pCodecArg;
+}
+
+int sqlite3_key(sqlite3 *db, const void *pKey, int nKey)
+{
+	return sqlite3_key_interop(db, pKey, nKey);
+}
+
+int sqlite3_rekey(sqlite3 *db, const void *pKey, int nKey)
+{
+	return sqlite3_rekey_interop(db, pKey, nKey);
+}
+
+int sqlite3CodecAttach(sqlite3 *db, int nDb, const void *pKey, int nKeyLen)
+{
+	int rc = SQLITE_ERROR;
+	unsigned char* hKey = 0;
+
+	//如果没有指定密匙,可能标识用了主数据库的加密或没加密.
+	if (!pKey || !nKeyLen)
+	{
+		if (!nDb)
+		{
+			return SQLITE_OK; //主数据库, 没有指定密钥所以没有加密.
+		}
+		else //附加数据库,使用主数据库的密钥.
+		{
+			//获取主数据库的加密块并复制密钥给附加数据库使用
+			LPCryptBlock pBlock = (LPCryptBlock) sqlite3pager_get_codecarg(
+					sqlite3BtreePager(db->aDb[0].pBt));
+
+			if (!pBlock)
+				return SQLITE_OK; //主数据库没有加密
+
+			if (!pBlock->ReadKey)
+				return SQLITE_OK; //没有加密
+
+			memcpy(pBlock->ReadKey, &hKey, 16);
+		}
+	}
+	else //用户提供了密码,从中创建密钥.
+	{
+		hKey = DeriveKey(pKey, nKeyLen);
+	}
+
+	//创建一个新的加密块,并将解码器指向新的附加数据库.
+	if (hKey)
+	{
+		LPCryptBlock pBlock = CreateCryptBlock(hKey,
+		sqlite3BtreePager(db->aDb[nDb].pBt), NULL);
+
+		sqlite3pager_set_codec(sqlite3BtreePager(db->aDb[nDb].pBt),
+				sqlite3Codec, pBlock);
+
+		rc = SQLITE_OK;
+	}
+
+	return rc;
+}
+
+// Changes the encryption key for an existing database.
+int sqlite3_rekey_interop(sqlite3 *db, const void *pKey, int nKeySize)
+{
+	Btree *pbt = db->aDb[0].pBt;
+	Pager *p = sqlite3BtreePager(pbt);
+	LPCryptBlock pBlock = (LPCryptBlock) sqlite3pager_get_codecarg(p);
+	unsigned char * hKey = DeriveKey(pKey, nKeySize);
+	int rc = SQLITE_ERROR;
+
+	if (!pBlock && !hKey)
+		return SQLITE_OK;
+
+	//重新加密一个数据库,改变pager的写密钥, 读密钥依旧保留.
+	if (!pBlock) //加密一个未加密的数据库
+	{
+		pBlock = CreateCryptBlock(hKey, p, NULL);
+		pBlock->ReadKey = 0; // 原始数据库未加密
+		sqlite3pager_set_codec(sqlite3BtreePager(pbt), sqlite3Codec, pBlock);
+	}
+	else // 改变已加密数据库的写密钥
+	{
+		pBlock->WriteKey = hKey;
+	}
+
+	// 开始一个事务
+	rc = sqlite3BtreeBeginTrans(pbt, 1);
+	if (!rc)
+	{
+		// 用新密钥重写所有的页到数据库。
+		//Pgno nPage = sqlite3PagerPagecount(p);
+		Pgno nSkip = PAGER_MJ_PGNO(p);
+		void *pPage;
+		Pgno n;
+		int nPage;
+
+		sqlite3PagerPagecount(p, &nPage);
+		for (n = 1; rc == SQLITE_OK && n <= nPage; n++)
+		{
+			if (n == nSkip)
+				continue;
+
+			rc = sqlite3PagerGet(p, n, &pPage);
+			if (!rc)
+			{
+				rc = sqlite3PagerWrite(pPage);
+				sqlite3PagerUnref(pPage);
+			}
+		}
+	}
+
+	// 如果成功，提交事务。
+	if (!rc)
+	{
+		rc = sqlite3BtreeCommit(pbt);
+	}
+
+	// 如果失败，回滚。
+	if (rc)
+	{
+		sqlite3BtreeRollback(pbt, SQLITE_OK);
+	}
+
+	// 如果成功，销毁先前的读密钥。并使读密钥等于当前的写密钥。
+	if (!rc)
+	{
+		if (pBlock->ReadKey)
+		{
+			sqlite3_free(pBlock->ReadKey);
+		}
+
+		pBlock->ReadKey = pBlock->WriteKey;
+	}
+	else // 如果失败，销毁当前的写密钥，并恢复为当前的读密钥。
+	{
+		if (pBlock->WriteKey)
+		{
+			sqlite3_free(pBlock->WriteKey);
+		}
+
+		pBlock->WriteKey = pBlock->ReadKey;
+	}
+
+	// 如果读密钥和写密钥皆为空，就不需要再对页进行编解码。
+	// 销毁加密块并移除页的编解码器
+	if (!pBlock->ReadKey && !pBlock->WriteKey)
+	{
+		sqlite3pager_set_codec(p, NULL, NULL);
+		DestroyCryptBlock(pBlock);
+	}
+
+	return rc;
+}
+
+int sqlite3_key_interop(sqlite3 *db, const void *pKey, int nKeySize)
+{
+	return sqlite3CodecAttach(db, 0, pKey, nKeySize);
+}
+
+// 释放与一个页相关的加密块
+void sqlite3pager_free_codecarg(void *pArg)
+{
+	if (pArg)
+		DestroyCryptBlock((LPCryptBlock) pArg);
+}
 #endif
 
 #ifndef SQLITE_OMIT_AUTOVACUUM
